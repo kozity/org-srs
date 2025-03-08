@@ -218,6 +218,32 @@
 
 (defvar org-srs-review-finish-hook nil)
 
+(cl-defun org-srs-review-one (item)
+  "A low-level function for reviewing a single item. This is about as low-level as the user should go. This function will present the single item given for review and keep valid its state and scheduling."
+  (let ((item-type (cl-first item)) (org-srs-reviewing-p t))
+    (apply #'org-srs-item-goto item)
+    (when-let ((offset-time-p (org-srs-review-learn-ahead-offset-time-p)))
+      (org-srs-review-add-hook-once
+       'org-srs-review-after-rate-hook
+       (let ((due-timestamp (org-srs-item-due-timestamp)))
+         (lambda ()
+           (when org-srs-review-rating
+             (let ((difference (org-srs-timestamp-difference due-timestamp (org-srs-timestamp-now))))
+               (when (cl-plusp difference)
+                 (apply #'org-srs-item-goto item)
+                 (org-srs-table-goto-starred-line)
+                 (let ((due-timestamp (org-srs-timestamp+ (org-srs-table-field 'timestamp) difference :sec)))
+                   (when (cl-etypecase offset-time-p
+                           (function (funcall offset-time-p (org-srs-timestamp-time due-timestamp)))
+                           ((eql t) t))
+                     (setf (org-srs-table-field 'timestamp) due-timestamp))))))))
+       75))
+    (cl-assert (not buffer-read-only) nil "Buffer %S must be editable." (current-buffer))
+    (setf org-srs-review-item-marker (point-marker))
+    (org-srs-log-hide-drawer org-srs-review-item-marker)
+    (apply #'org-srs-item-review (car item-type) (cdr item-type))
+    (org-srs-log-hide-drawer org-srs-review-item-marker)))
+
 ;;;###autoload
 (cl-defun org-srs-review-start (&optional (source (cdr (cl-first (org-srs-review-sources)))))
   "Start a review session for items in SOURCE.
@@ -234,33 +260,11 @@ to review."
                     (cdr (cl-first sources))))))
   (require 'org-srs)
   (if-let ((item-args (let ((org-srs-reviewing-p t)) (org-srs-review-next-due-item source))))
-      (let ((item (cl-first item-args)) (org-srs-reviewing-p t))
-        (apply #'org-srs-item-goto item-args)
-        (when-let ((offset-time-p (org-srs-review-learn-ahead-offset-time-p)))
-          (org-srs-review-add-hook-once
-           'org-srs-review-after-rate-hook
-           (let ((due-timestamp (org-srs-item-due-timestamp)))
-             (lambda ()
-               (when org-srs-review-rating
-                 (let ((difference (org-srs-timestamp-difference due-timestamp (org-srs-timestamp-now))))
-                   (when (cl-plusp difference)
-                     (apply #'org-srs-item-goto item-args)
-                     (org-srs-table-goto-starred-line)
-                     (let ((due-timestamp (org-srs-timestamp+ (org-srs-table-field 'timestamp) difference :sec)))
-                       (when (cl-etypecase offset-time-p
-                               (function (funcall offset-time-p (org-srs-timestamp-time due-timestamp)))
-                               ((eql t) t))
-                         (setf (org-srs-table-field 'timestamp) due-timestamp))))))))
-           75))
-        (cl-assert (not buffer-read-only) nil "Buffer %S must be editable." (current-buffer))
-        (setf org-srs-review-item-marker (point-marker))
-        (org-srs-log-hide-drawer org-srs-review-item-marker)
-        (apply #'org-srs-item-review (car item) (cdr item))
-        (org-srs-log-hide-drawer org-srs-review-item-marker)
-        (org-srs-review-add-hook-once
-         'org-srs-review-after-rate-hook
-         (apply-partially #'org-srs-review-start source)
-         100))
+      (progn (org-srs-review-one item-args)
+             (org-srs-review-add-hook-once
+              'org-srs-review-after-rate-hook
+              (apply-partially #'org-srs-review-start source)
+              100))
     (run-hook-with-args 'org-srs-review-finish-hook source)))
 
 (defun org-srs-review-message-review-done (&rest _args)
