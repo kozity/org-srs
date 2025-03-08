@@ -244,6 +244,36 @@
     (apply #'org-srs-item-review (car item-type) (cdr item-type))
     (org-srs-log-hide-drawer org-srs-review-item-marker)))
 
+(defcustom org-srs-review-all-sources nil
+  "A proper list of sources that `org-srs-review-all-random' pulls from by default.
+
+A source can be:
+- A filepath
+- TODO Other things?")
+
+(defvar org-srs--pool nil
+  "Used by `org-srs-review-all-random'. Shouldn't be modified in other ways.")
+
+(cl-defun org-srs-review-one-random ()
+  (when org-srs--pool
+    (let ((source (nth (random (length org-srs--pool)) org-srs--pool)))
+      (if-let ((item-args (let ((org-srs-reviewing-p t)) (org-srs-review-next-due-item source))))
+          (progn
+            (org-srs-review-one item-args)
+            (org-srs-review-add-hook-once
+             'org-srs-review-after-rate-hook
+             #'org-srs-review-one-random
+             100))
+          (setq org-srs--pool (cl-remove source org-srs--pool))
+          (org-srs-review-one-random)))))
+
+(cl-defun org-srs-review-all-random (&optional (sources org-srs-review-all-sources))
+  "Start a review session for all items in SOURCES, which defaults to `org-srs-review-all-sources'. Reviews due items from each source until there are none left."
+  (interactive)
+  (cl-assert (not (org-srs-reviewing-p)))
+  (setq org-srs--pool sources)
+  (org-srs-review-one-random))
+
 ;;;###autoload
 (cl-defun org-srs-review-start (&optional (source (cdr (cl-first (org-srs-review-sources)))))
   "Start a review session for items in SOURCE.
@@ -279,6 +309,11 @@ to review."
   (cl-assert (org-srs-reviewing-p))
   (cl-assert (local-variable-p 'org-srs-review-after-rate-hook))
   (cl-assert (> (length org-srs-review-after-rate-hook) 1))
+
+  ;; (Ty) If the user started this session with `org-srs-review-all-random', we must remove its companion from this hook so it stops offering items for review.
+  (setq org-srs-review-after-rate-hook
+        (remove #'org-srs-review-one-random org-srs-review-after-rate-hook))
+
   (when-let ((position (cl-position t org-srs-review-after-rate-hook :from-end t :test-not #'eq)))
     (if (cl-plusp position)
         (pop (cdr (nthcdr (1- position) org-srs-review-after-rate-hook)))
